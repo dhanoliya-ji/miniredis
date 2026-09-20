@@ -1,0 +1,214 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A push that supersedes an in-flight run cancels it, so the queue does not
+# fill with builds of commits nobody is waiting on any more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    # The point of the matrix is the platform abstraction: net.cpp is the only
+    # file that includes a socket header, and the Windows and POSIX halves of
+    # it are only ever both exercised if both are built.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (GCC)
+            os: ubuntu-latest
+            cc: gcc
+            cxx: g++
+          - name: Linux (Clang)
+            os: ubuntu-latest
+            cc: clang
+            cxx: clang++
+          - name: macOS (AppleClang)
+            os: macos-latest
+            cc: clang
+            cxx: clang++
+          - name: Windows (MSVC)
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.cxx }}" ]; then
+            export CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
+          fi
+          # -Werror is on in CI but off by default locally, so a warning fails
+          # the build here without making the project hostile to hack on.
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMINIREDIS_WERROR=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Unit tests
+        shell: bash
+        run: |
+          if [ -f build/bin/Release/miniredis-tests.exe ]; then
+            ./build/bin/Release/miniredis-tests
+          elif [ -f build/bin/miniredis-tests.exe ]; then
+            ./build/bin/miniredis-tests
+          else
+            ./build/bin/miniredis-tests
+          fi
+
+      - name: Integration tests (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p bin
+          cp build/bin/miniredis-server build/bin/miniredis-cli bin/
+          chmod +x scripts/integration_test.sh
+          ./scripts/integration_test.sh
+
+      - name: Integration tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Copy-Item build/bin/Release/*.exe bin/ -Force
+          ./scripts/integration_test.ps1
+
+      - name: Smoke test the server
+        shell: bash
+        run: |
+          set -e
+          binary=bin/miniredis-server
+          client=bin/miniredis-cli
+          [ -f "$binary.exe" ] && binary="$binary.exe" && client="$client.exe"
+
+          mkdir -p ci-data
+          "$binary" --port 7999 --dir ci-data --save &
+          server_pid=$!
+          sleep 2
+
+          # Enough to prove the binary actually serves traffic, rather than
+          # merely linking.
+          "$client" -p 7999 PING
+          "$client" -p 7999 SET ci-key ci-value
+          "$client" -p 7999 GET ci-key
+          "$client" -p 7999 COMMAND COUNT
+          "$client" -p 7999 INFO server
+
+          kill $server_pid 2>/dev/null || true
+
+  sanitizers:
+    name: Sanitizers (ASan + UBSan)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build instrumented
+        run: |
+          # A single-threaded server with no locks still has plenty of room for
+          # a dangling pointer: a rehash can invalidate a value pointer taken
+          # before a key was created. ASan is what catches that.
+          cmake -S . -B build-asan \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+          cmake --build build-asan --parallel
+
+      - name: Unit tests under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ./build-asan/bin/miniredis-tests
+
+      - name: Exercise the server under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: |
+          set -e
+          mkdir -p asan-data
+          ./build-asan/bin/miniredis-server --port 7998 --dir asan-data --save &
+          server_pid=$!
+          sleep 3
+
+          cli=./build-asan/bin/miniredis-cli
+
+          # Touch every data type, both persistence paths and the SQL layer, so
+          # the sanitizers see more than the connection handshake.
+          $cli -p 7998 SET s hello
+          $cli -p 7998 APPEND s " world"
+          $cli -p 7998 INCRBY counter 42
+          $cli -p 7998 RPUSH list a b c
+          $cli -p 7998 LRANGE list 0 -1
+          $cli -p 7998 LMOVE list list LEFT RIGHT
+          $cli -p 7998 HSET hash f1 v1 f2 v2
+          $cli -p 7998 HGETALL hash
+          $cli -p 7998 SADD set a b c
+          $cli -p 7998 SPOP set 2
+          $cli -p 7998 ZADD zset 1 a 2 b 3 c
+          $cli -p 7998 ZRANGEBYSCORE zset 1 3 WITHSCORES
+          $cli -p 7998 ZPOPMIN zset
+          $cli -p 7998 EXPIRE s 100
+          $cli -p 7998 TTL s
+          $cli -p 7998 SCAN 0 COUNT 100
+          $cli -p 7998 SQL "SELECT * FROM kv"
+          $cli -p 7998 SAVE
+          $cli -p 7998 BGREWRITEAOF || true
+          $cli -p 7998 INFO all
+          $cli -p 7998 MEMORY DOCTOR
+          $cli -p 7998 FLUSHALL
+
+          kill -INT $server_pid
+          # A clean SIGINT shutdown flushes the append-only file, so waiting
+          # here is what gives ASan a chance to report a leak on the way out.
+          wait $server_pid || true
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install
+        run: pip install --quiet matplotlib pandas reportlab nbformat nbconvert jupyter
+
+      - name: Regenerate the notebook and PDFs
+        run: |
+          python notebooks/build_notebook.py
+          jupyter nbconvert --execute --inplace --to notebook notebooks/benchmarks.ipynb
+          python docs/build_pdfs.py
+
+      - name: Check the committed artefacts are current
+        run: |
+          # The charts and the PDFs are generated from the CSVs in the repo, so
+          # a stale committed artefact means a figure in the docs no longer
+          # matches the data it claims to come from.
+          if ! git diff --quiet --stat -- docs/*.pdf; then
+            echo "The committed PDFs differ from a fresh build."
+            echo "Run: python docs/build_pdfs.py"
+            git diff --stat -- docs/*.pdf
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: |
+            docs/*.pdf
+            notebooks/benchmarks.ipynb
