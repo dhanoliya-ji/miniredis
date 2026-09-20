@@ -16,6 +16,12 @@ public:
     bool get(const std::string& key, std::string& value);
     void put(const std::string& key, const std::string& value, bool writeToWal = true);
     bool del(const std::string& key, bool writeToWal = true);
+
+    // Atomic compare-and-set variants. These exist so callers never have to do
+    // a get() followed by a put(), which is racy: another thread can slip in
+    // between the two calls and the caller then reports the wrong outcome.
+    bool putIfAbsent(const std::string& key, const std::string& value);
+    bool putIfPresent(const std::string& key, const std::string& value);
     
     // WAL Persistence and Recovery
     void loadFromWalAndSnapshot();

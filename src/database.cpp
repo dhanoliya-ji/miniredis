@@ -101,6 +101,27 @@ bool Database::del(const std::string& key, bool writeToWal) {
     return erased;
 }
 
+bool Database::putIfAbsent(const std::string& key, const std::string& value) {
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    if (m_store.find(key) != m_store.end()) {
+        return false;
+    }
+    m_store[key] = value;
+    writeWalRecord("PUT", key, value);
+    return true;
+}
+
+bool Database::putIfPresent(const std::string& key, const std::string& value) {
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    auto it = m_store.find(key);
+    if (it == m_store.end()) {
+        return false;
+    }
+    it->second = value;
+    writeWalRecord("PUT", key, value);
+    return true;
+}
+
 void Database::loadFromWalAndSnapshot() {
     std::unique_lock<std::shared_mutex> lock(m_mutex);
     m_store.clear();
