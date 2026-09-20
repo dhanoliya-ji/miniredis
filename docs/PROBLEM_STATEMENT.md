@@ -178,7 +178,7 @@ Stating what is *not* attempted is part of an honest problem statement:
 | Network | Cross-platform non-blocking sockets (Winsock2 + POSIX), `poll()`/`WSAPoll` multiplexing |
 | Protocol | RESP2 codec, incremental request parser, inline command support |
 | Execution | Single-threaded event loop, command dispatch table with metadata-driven routing |
-| Data model | Strings, lists, hashes, sets, sorted sets — ~150 commands |
+| Data model | Strings, lists, hashes, sets, sorted sets — 148 commands |
 | Lifetime | TTL expiry (lazy + active sampling cycle) |
 | Memory | `maxmemory` with 8 eviction policies, sampled approximated LRU/LFU |
 | Durability | Append-only log with 3 fsync policies + self-rewriting; CRC64-checked binary snapshots |

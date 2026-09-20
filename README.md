@@ -75,7 +75,7 @@ The full reasoning is in **[docs/PROBLEM_STATEMENT.md](docs/PROBLEM_STATEMENT.md
 |---|---|
 | **Protocol** | RESP2, incremental parser correct under TCP fragmentation; inline commands so it works over plain telnet |
 | **Concurrency** | Single-threaded event loop, `poll()`/`WSAPoll`, thousands of connections, zero locks |
-| **Data types** | Strings, lists, hashes, sets, sorted sets — ~150 commands |
+| **Data types** | Strings, lists, hashes, sets, sorted sets — 148 commands |
 | **Expiry** | TTLs with both lazy and active sampling reclamation |
 | **Memory** | `maxmemory` with all 8 eviction policies, sampled approximated LRU/LFU |
 | **Durability** | Append-only log (3 fsync policies, self-rewriting) + CRC64-checked binary snapshots |
