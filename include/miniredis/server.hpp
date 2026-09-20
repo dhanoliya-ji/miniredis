@@ -246,6 +246,11 @@ public:
     int databaseCount() const { return static_cast<int>(m_databases.size()); }
     Keyspace& currentDb(const Client& client) { return db(client.dbIndex); }
 
+    // Exchanges the contents of two databases. Swapping the Keyspace objects
+    // themselves would carry their index and removal hook across with them, so
+    // only the owning pointers are exchanged and the indexes are restored.
+    void swapDatabases(int first, int second);
+
     const CommandTable& commands() const { return m_commands; }
     ServerStats& stats() { return m_stats; }
     const ServerStats& stats() const { return m_stats; }

@@ -71,6 +71,7 @@ public:
     explicit Keyspace(int index) : m_index(index) {}
 
     int index() const { return m_index; }
+    void setIndex(int index) { m_index = index; }
 
     // ---------------------------------------------------------------------
     // Lookup
