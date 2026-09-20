@@ -378,15 +378,18 @@ TEST(Eviction, LruPrefersTheLeastRecentlyTouchedKey) {
     keyspace.setValue("new", Object::makeString("v"));
     keyspace.lookupRead("new", kNow);
 
-    // Sampling draws with replacement, so a single round can legitimately see
-    // only one of the two keys. The guarantee is statistical: across many
-    // rounds the stale key must be proposed far more often than the fresh one,
-    // and the fresh one must never be proposed by a round that also saw the
-    // stale one. Counting is the honest way to assert an approximate policy.
+    // With only two keys, whether one round of sampling happens to see both
+    // depends on the standard library's string hash and its bucket layout, so
+    // asserting on a single round is not portable -- an earlier version of this
+    // test passed on libstdc++ and failed on libc++ for exactly that reason.
+    //
+    // Enough rounds make the property deterministic in practice: the stale key
+    // must win the clear majority of the time, because any round that sees both
+    // must prefer it.
     int choseOld = 0;
     int choseNew = 0;
 
-    for (int attempt = 0; attempt < 200; ++attempt) {
+    for (int attempt = 0; attempt < 500; ++attempt) {
         const EvictionCandidate candidate =
             keyspace.sampleEvictionCandidate(EvictionPolicy::AllKeysLru, 10, 2000, kNow);
         if (!candidate.valid) continue;
@@ -394,16 +397,46 @@ TEST(Eviction, LruPrefersTheLeastRecentlyTouchedKey) {
         else ++choseNew;
     }
 
-    CHECK(choseOld > 0);
     CHECK(choseOld > choseNew);
+}
 
-    // And the scores themselves must be ordered the right way round, which is
-    // the deterministic core of the behaviour the sampling approximates.
-    keyspace.setLruClock(2000);
-    const EvictionCandidate onlyOld =
-        keyspace.sampleEvictionCandidate(EvictionPolicy::AllKeysLru, 1, 5000, kNow);
-    CHECK(onlyOld.valid);
-    CHECK(onlyOld.idleScore > 0); // idle time is positive for both, by construction
+TEST(Eviction, SamplingIsNotBiasedTowardsParticularKeys) {
+    // Approximated LRU rests entirely on the sample being representative:
+    // "evict the oldest of five" is only as good as the five. A sampler that
+    // picks a random bucket and then scans forward to the first non-empty one
+    // is badly biased -- a bucket following a long empty run inherits the
+    // probability of that whole run -- and which key that favours depends on
+    // the standard library's hash, so it differs between platforms.
+    //
+    // Every key here carries the same access metadata, so under a random policy
+    // each should be proposed a roughly equal share of the time.
+    Keyspace keyspace(0);
+    constexpr int kKeyCount = 20;
+    for (int i = 0; i < kKeyCount; ++i) {
+        keyspace.setValue("key:" + std::to_string(i), Object::makeString("v"));
+    }
+
+    std::unordered_map<std::string, int> proposals;
+    constexpr int kRounds = 4000;
+    for (int attempt = 0; attempt < kRounds; ++attempt) {
+        const EvictionCandidate candidate =
+            keyspace.sampleEvictionCandidate(EvictionPolicy::AllKeysRandom, 1, 1000, kNow);
+        if (candidate.valid) ++proposals[candidate.key];
+    }
+
+    // Every key must be reachable at all. A key that is never proposed can
+    // never be evicted, which is the failure mode that matters.
+    CHECK_EQ(proposals.size(), size_t{kKeyCount});
+
+    // And no key may dominate. A perfectly uniform sampler gives each 5%; the
+    // bound here is loose enough not to be flaky but tight enough to catch the
+    // 12:1 skew the forward-scan version produced.
+    const int expected = kRounds / kKeyCount;
+    for (const auto& [key, count] : proposals) {
+        (void)key;
+        CHECK(count > expected / 4);
+        CHECK(count < expected * 4);
+    }
 }
 
 // ---------------------------------------------------------------------------

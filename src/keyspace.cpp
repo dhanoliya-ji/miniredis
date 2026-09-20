@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace miniredis {
 
@@ -363,41 +364,74 @@ size_t Keyspace::memoryUsage() const {
 // Eviction
 // ---------------------------------------------------------------------------
 
-KeyEntry* Keyspace::randomEntry(bool volatileOnly, Bytes& keyOut) {
-    if (volatileOnly) {
-        if (m_expires.empty()) return nullptr;
-        const size_t bucketCount = m_expires.bucket_count();
-        if (bucketCount == 0) return nullptr;
+namespace {
 
-        size_t bucket = static_cast<size_t>(m_random() % bucketCount);
-        for (size_t scanned = 0; scanned < bucketCount; ++scanned) {
-            auto it = m_expires.begin(bucket);
-            if (it != m_expires.end(bucket)) {
-                auto entryIt = m_dict.find(it->first);
-                if (entryIt != m_dict.end()) {
-                    keyOut = entryIt->first;
-                    return &entryIt->second;
-                }
-            }
-            bucket = (bucket + 1) % bucketCount;
-        }
-        return nullptr;
+// Draws one key at close to uniform random from an unordered container.
+//
+// The obvious implementation -- pick a random bucket, then scan forward to the
+// first non-empty one -- is badly biased: a bucket sitting just after a long
+// empty run receives the probability of that entire run, while a key whose
+// bucket is immediately preceded by a full one is almost never drawn. With only
+// a handful of keys the bias can reach 12:1, and which key wins depends on the
+// standard library's string hash, so the same code picks differently on
+// libstdc++ and libc++.
+//
+// That matters because approximated LRU rests entirely on the sample being
+// representative: "evict the oldest of five" is only as good as the five.
+//
+// So instead: retry independent random buckets, and pick a random element
+// within the chosen one. With unordered_map's default max_load_factor of 1.0
+// a random bucket is non-empty roughly 63% of the time, so a few retries almost
+// always succeed. The forward scan remains only as a last resort, to guarantee
+// this never returns nothing for a non-empty container.
+template <typename Map, typename Random>
+typename Map::iterator drawRandomEntry(Map& map, Random& random) {
+    if (map.empty()) return map.end();
+
+    const size_t bucketCount = map.bucket_count();
+    if (bucketCount == 0) return map.end();
+
+    constexpr int kRandomBucketAttempts = 16;
+    for (int attempt = 0; attempt < kRandomBucketAttempts; ++attempt) {
+        const size_t bucket = static_cast<size_t>(random() % bucketCount);
+        const size_t inBucket = map.bucket_size(bucket);
+        if (inBucket == 0) continue;
+
+        auto it = map.begin(bucket);
+        std::advance(it, static_cast<long>(random() % inBucket));
+        return map.find(it->first);
     }
 
-    if (m_dict.empty()) return nullptr;
-    const size_t bucketCount = m_dict.bucket_count();
-    if (bucketCount == 0) return nullptr;
-
-    size_t bucket = static_cast<size_t>(m_random() % bucketCount);
+    // Sparse table: fall back to a scan so a valid key is still produced.
+    size_t bucket = static_cast<size_t>(random() % bucketCount);
     for (size_t scanned = 0; scanned < bucketCount; ++scanned) {
-        auto it = m_dict.begin(bucket);
-        if (it != m_dict.end(bucket)) {
-            keyOut = it->first;
-            return &it->second;
+        if (map.bucket_size(bucket) > 0) {
+            return map.find(map.begin(bucket)->first);
         }
         bucket = (bucket + 1) % bucketCount;
     }
-    return nullptr;
+    return map.end();
+}
+
+} // namespace
+
+KeyEntry* Keyspace::randomEntry(bool volatileOnly, Bytes& keyOut) {
+    if (volatileOnly) {
+        auto expireIt = drawRandomEntry(m_expires, m_random);
+        if (expireIt == m_expires.end()) return nullptr;
+
+        auto entryIt = m_dict.find(expireIt->first);
+        if (entryIt == m_dict.end()) return nullptr;
+
+        keyOut = entryIt->first;
+        return &entryIt->second;
+    }
+
+    auto entryIt = drawRandomEntry(m_dict, m_random);
+    if (entryIt == m_dict.end()) return nullptr;
+
+    keyOut = entryIt->first;
+    return &entryIt->second;
 }
 
 EvictionCandidate Keyspace::sampleEvictionCandidate(EvictionPolicy policy, size_t sampleSize,

@@ -8,6 +8,8 @@
 #include "miniredis/common.hpp"
 #include "miniredis/resp.hpp"
 
+#include <limits>
+
 using namespace miniredis;
 
 namespace {
@@ -50,8 +52,12 @@ TEST(Parsing, FormatsDoublesWithoutSpuriousDecimals) {
     // comparing ZSCORE output against its own formatting will disagree.
     CHECK_EQ(formatDouble(3.0), std::string("3"));
     CHECK_EQ(formatDouble(-7.0), std::string("-7"));
-    CHECK_EQ(formatDouble(1.0 / 0.0), std::string("inf"));
-    CHECK_EQ(formatDouble(-1.0 / 0.0), std::string("-inf"));
+
+    // std::numeric_limits rather than 1.0 / 0.0: MSVC evaluates the literal
+    // division at compile time and rejects it as a hard error.
+    const double infinity = std::numeric_limits<double>::infinity();
+    CHECK_EQ(formatDouble(infinity), std::string("inf"));
+    CHECK_EQ(formatDouble(-infinity), std::string("-inf"));
 
     double roundTripped = 0;
     CHECK(parseDouble(formatDouble(3.14159265358979), roundTripped));
