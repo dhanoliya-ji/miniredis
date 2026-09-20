@@ -1,15 +1,34 @@
-# Compilation outputs
+# Build output
+build/
+bin/
 *.exe
 *.o
 *.obj
+*.a
+*.lib
+*.pdb
+*.ilk
+compile_commands.json
 
-# Database log files & snapshots
+# Runtime data directories produced by the server
+data/
+*.aof
+*.rdb
 *_wal.log
 *_snapshot.db
 *.tmp
-*.log
-*.db
 
-# OS specific files
+# Benchmark scratch (checked-in results live in bench/results/)
+bench/scratch/
+
+# Python / notebook
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Editors and OS
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
