@@ -343,6 +343,16 @@ int main(int argc, char* argv[]) {
         std::cout << options.host << ":" << options.port << "> " << std::flush;
         if (!std::getline(std::cin, line)) break;
 
+        // Strip a UTF-8 byte-order mark. Anything that pipes a UTF-8 file or a
+        // PowerShell string into stdin is liable to prefix one, and without
+        // this the first command of the session arrives as "\xEF\xBB\xBFPING"
+        // and is rejected as unknown.
+        if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
+            static_cast<unsigned char>(line[1]) == 0xBB &&
+            static_cast<unsigned char>(line[2]) == 0xBF) {
+            line.erase(0, 3);
+        }
+
         const std::string trimmed = trim(line);
         if (trimmed.empty()) continue;
 
