@@ -222,6 +222,15 @@ bool Server::saveSnapshot(std::string& error) {
     return true;
 }
 
+void Server::swapDatabases(int first, int second) {
+    if (first == second) return;
+    auto& a = m_databases[static_cast<size_t>(first)];
+    auto& b = m_databases[static_cast<size_t>(second)];
+    std::swap(a, b);
+    a->setIndex(first);
+    b->setIndex(second);
+}
+
 void Server::flushAllDatabases() {
     for (auto& database : m_databases) database->clear();
 }
@@ -718,11 +727,17 @@ void Server::executeCommand(Client& client, const Args& args) {
         for (size_t i = 1; i < args.size() && i < 4; ++i) {
             message += "'" + args[i] + "' ";
         }
+        // Inside a transaction, a command that cannot even be queued poisons
+        // the whole batch. EXEC will then refuse to run any of it, rather than
+        // silently dropping one operation from a sequence the client believes
+        // is complete.
+        if (client.inMulti) client.multiQueueError = true;
         addReply(client, "-" + message + "\r\n");
         return;
     }
 
     if (!spec->matchesArity(args.size())) {
+        if (client.inMulti && (spec->flags & cmdflag::kNoMulti) == 0) client.multiQueueError = true;
         addReply(client, "-" + wrongArgsError(spec->name) + "\r\n");
         return;
     }
