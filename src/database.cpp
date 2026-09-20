@@ -81,21 +81,20 @@ bool Database::get(const std::string& key, std::string& value) {
 }
 
 void Database::put(const std::string& key, const std::string& value, bool writeToWal) {
-    {
-        std::unique_lock<std::shared_mutex> lock(m_mutex);
-        m_store[key] = value;
-    }
+    // The WAL append must happen under the same lock that mutates the map.
+    // Appending after the lock was released let two concurrent writers to the
+    // same key land in the log in the opposite order to the one they applied
+    // in memory, so recovery could resurrect the older value.
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    m_store[key] = value;
     if (writeToWal) {
         writeWalRecord("PUT", key, value);
     }
 }
 
 bool Database::del(const std::string& key, bool writeToWal) {
-    bool erased = false;
-    {
-        std::unique_lock<std::shared_mutex> lock(m_mutex);
-        erased = (m_store.erase(key) > 0);
-    }
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    const bool erased = (m_store.erase(key) > 0);
     if (erased && writeToWal) {
         writeWalRecord("DEL", key);
     }
