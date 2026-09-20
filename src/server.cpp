@@ -4,12 +4,21 @@
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <atomic>
 #include "network.hpp"
 #include "database.hpp"
 #include "sql_parser.hpp"
 #include "replication.hpp"
 
+// Number of connection threads currently alive; reported on accept so an
+// operator can see the server is not accumulating dead threads.
+static std::atomic<int> g_activeConnections{0};
+
 void clientHandler(SOCKET clientSock, Database& db, ReplicationManager& repl, bool isFollower) {
+    struct ConnectionGuard {
+        ~ConnectionGuard() { g_activeConnections.fetch_sub(1, std::memory_order_relaxed); }
+    } guard;
+
     std::string msg;
     while (true) {
         if (!Network::recvString(clientSock, msg)) {
@@ -188,7 +197,6 @@ int main(int argc, char* argv[]) {
 
     std::cout << "[Server] Server listening on port " << port << "..." << std::endl;
 
-    std::vector<std::thread> clientThreads;
     bool running = true;
 
     while (running) {
@@ -203,16 +211,15 @@ int main(int argc, char* argv[]) {
 
         char ipStr[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &clientAddr.sin_addr, ipStr, sizeof(ipStr));
-        std::cout << "[Server] Accepted new connection from " << ipStr << ":" << ntohs(clientAddr.sin_port) << std::endl;
+        std::cout << "[Server] Accepted new connection from " << ipStr << ":" << ntohs(clientAddr.sin_port)
+                  << " (active connections: " << g_activeConnections.load(std::memory_order_relaxed) + 1 << ")" << std::endl;
 
-        clientThreads.push_back(std::thread(clientHandler, clientSock, std::ref(db), std::ref(repl), isFollower));
-    }
-
-    // Join all threads before cleanup (unreachable in infinite loop but good practice)
-    for (auto& t : clientThreads) {
-        if (t.joinable()) {
-            t.join();
-        }
+        // Detach rather than collecting the std::thread objects in a vector: the
+        // old code never joined them, so every connection ever accepted leaked a
+        // thread handle and the vector grew without bound for the process
+        // lifetime. A detached thread releases its handle when it returns.
+        g_activeConnections.fetch_add(1, std::memory_order_relaxed);
+        std::thread(clientHandler, clientSock, std::ref(db), std::ref(repl), isFollower).detach();
     }
 
     Network::closeSocket(listenSock);
