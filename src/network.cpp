@@ -113,8 +113,7 @@ bool Network::recvString(SOCKET sock, std::string& str) {
 
     char chunk[kRecvChunk];
     while (true) {
-        size_t newlinePos = buffer.find('
-');
+        size_t newlinePos = buffer.find('\n');
         if (newlinePos != std::string::npos) {
             str.assign(buffer, 0, newlinePos);
             buffer.erase(0, newlinePos + 1);
