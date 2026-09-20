@@ -3,6 +3,11 @@
 #include <sstream>
 
 static std::string escape(const std::string& str) {
+    // The log format is whitespace separated, so an empty string would vanish
+    // and shift every later field left when the record is read back. Encode it
+    // as an explicit \e marker instead.
+    if (str.empty()) return "\\e";
+
     std::string res;
     for (char c : str) {
         if (c == '\n') res += "\\n";
@@ -23,6 +28,7 @@ static std::string unescape(const std::string& str) {
             else if (next == 'r') res += '\r';
             else if (next == '\\') res += '\\';
             else if (next == 's') res += ' ';
+            else if (next == 'e') { /* explicit empty-string marker */ }
             else res += next;
             i++;
         } else {
