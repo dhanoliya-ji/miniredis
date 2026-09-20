@@ -1,6 +1,8 @@
 #include "network.hpp"
 #include <iostream>
 #include <vector>
+#include <mutex>
+#include <unordered_map>
 
 bool Network::init() {
     WSADATA wsaData;
@@ -23,9 +25,12 @@ SOCKET Network::listenOnPort(int port) {
         return INVALID_SOCKET;
     }
 
-    // Set socket options (SO_REUSEADDR)
-    char optval = 1;
-    setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+    // SO_REUSEADDR takes a BOOL/int-sized option on Winsock. Passing a single
+    // `char` made setsockopt read 4 bytes from a 1-byte object, so the option
+    // was set from three bytes of stack garbage.
+    int optval = 1;
+    setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR,
+               reinterpret_cast<const char*>(&optval), sizeof(optval));
 
     sockaddr_in service{};
     service.sin_family = AF_INET;
@@ -88,25 +93,50 @@ bool Network::sendString(SOCKET sock, const std::string& str) {
     return true;
 }
 
+namespace {
+
+// Reading a line one byte at a time issues a syscall per character. We instead
+// keep a small carry-over buffer per socket and refill it in 4 KiB chunks,
+// which cuts recv() calls on a typical command by two orders of magnitude.
+constexpr size_t kRecvChunk = 4096;
+
+std::mutex g_bufferMutex;
+std::unordered_map<SOCKET, std::string> g_recvBuffers;
+
+} // namespace
+
 bool Network::recvString(SOCKET sock, std::string& str) {
     str.clear();
-    char c;
+
+    std::lock_guard<std::mutex> lock(g_bufferMutex);
+    std::string& buffer = g_recvBuffers[sock];
+
+    char chunk[kRecvChunk];
     while (true) {
-        int res = recv(sock, &c, 1, 0);
-        if (res > 0) {
-            if (c == '\n') {
-                break;
-            }
-            str += c;
-        } else {
+        size_t newlinePos = buffer.find('
+');
+        if (newlinePos != std::string::npos) {
+            str.assign(buffer, 0, newlinePos);
+            buffer.erase(0, newlinePos + 1);
+            return true;
+        }
+
+        int received = recv(sock, chunk, static_cast<int>(kRecvChunk), 0);
+        if (received <= 0) {
             return false; // Connection closed or error
         }
+        buffer.append(chunk, static_cast<size_t>(received));
     }
-    return true;
+}
+
+void Network::forgetSocketBuffer(SOCKET sock) {
+    std::lock_guard<std::mutex> lock(g_bufferMutex);
+    g_recvBuffers.erase(sock);
 }
 
 void Network::closeSocket(SOCKET sock) {
     if (sock != INVALID_SOCKET) {
+        forgetSocketBuffer(sock);
         closesocket(sock);
     }
 }

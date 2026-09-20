@@ -24,5 +24,6 @@ public:
     static bool recvString(SOCKET sock, std::string& str);
 
     static void closeSocket(SOCKET sock);
+    static void forgetSocketBuffer(SOCKET sock);
     static std::string getLastErrorStr();
 };
