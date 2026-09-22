@@ -1,0 +1,8 @@
+{
+  "name": "miniredis-web-console",
+  "private": true,
+  "type": "module",
+  "description": "Browser console that bridges to a running miniredis over RESP2.",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "ws": "^8.18.3" }
+}

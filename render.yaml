@@ -1,0 +1,14 @@
+# Render Blueprint — the MiniRedis web console.
+#
+# One container runs both the C++ database (loopback only) and the Node bridge
+# that serves the console, so the database is never exposed directly.
+services:
+  - type: web
+    name: miniredis-console
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
