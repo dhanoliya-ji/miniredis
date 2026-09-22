@@ -11,9 +11,11 @@ COPY include ./include
 COPY src ./src
 COPY tools ./tools
 # Only the server is needed at runtime; skipping the CLI, benchmark and tests
-# keeps the build well inside a free-tier build window.
+# keeps the build well inside a free-tier build window. -j2 rather than
+# $(nproc): the builder advertises many cores but not the memory to match, and
+# parallel C++20 translation units get the build OOM-killed.
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-    && cmake --build build --target miniredis-server -j "$(nproc)"
+    && cmake --build build --target miniredis-server -j 2
 
 FROM node:20-bookworm-slim AS runtime
 ENV NODE_ENV=production \
