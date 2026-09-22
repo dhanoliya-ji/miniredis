@@ -24,7 +24,7 @@ ENV NODE_ENV=production \
     PORT=8080
 WORKDIR /app
 
-COPY --from=build /src/build/miniredis-server /usr/local/bin/miniredis-server
+COPY --from=build /src/build/bin/miniredis-server /usr/local/bin/miniredis-server
 COPY miniredis.conf /app/miniredis.conf
 
 COPY web/package.json web/package-lock.json* ./web/
