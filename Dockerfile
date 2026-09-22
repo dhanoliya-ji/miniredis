@@ -34,11 +34,12 @@ COPY web ./web
 # The console is public, so the database itself listens only on loopback inside
 # the container; the Node bridge is the only thing bound to the outside.
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# The node image already ships a non-root user at uid 1000, so reuse it rather
+# than adding a second account at the same id.
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
     && mkdir -p /app/data \
-    && useradd --create-home --uid 1000 miniredis \
-    && chown -R miniredis:miniredis /app
-USER miniredis
+    && chown -R node:node /app
+USER node
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
